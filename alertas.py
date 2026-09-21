@@ -42,8 +42,8 @@ def comprobar_alertas():
             ultima = df.iloc[-1]
             
             # Detección
-            es_spring = (ultima['Vol_Ratio'] >= 1.5) and (ultima['Close'] <= ultima['Min_Reciente'])
-            es_upthrust = (ultima['Vol_Ratio'] >= 1.5) and (ultima['Close'] >= ultima['Max_Reciente'])
+            es_spring = (ultima['Vol_Ratio'] >= 1.2) and (ultima['Close'] <= ultima['Min_Reciente'])
+            es_upthrust = (ultima['Vol_Ratio'] >= 1.2) and (ultima['Close'] >= ultima['Max_Reciente'])
             
             if es_spring:
                 alertas.append(f"🟢 **SPRING (Acumulación)** detectado en **{ticker}** | Precio: ${round(ultima['Close'], 2)} | Vol Ratio: {round(ultima['Vol_Ratio'], 2)}x")
