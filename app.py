@@ -143,7 +143,7 @@ tickers_lista = list(activos_dic.keys())
 # ==========================================
 # 3. FUNCIONES DE DESCARGA Y CÁLCULO
 # ==========================================
-@st.cache_data(ttl=14400)
+@st.cache_data(ttl=900)
 def descargar_datos(tickers, period, interval):
     return yf.download(tickers, period=period, interval=interval, group_by="ticker", progress=False)
 
