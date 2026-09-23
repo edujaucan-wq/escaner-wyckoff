@@ -143,16 +143,17 @@ tickers_lista = list(activos_dic.keys())
 # ==========================================
 # 3. FUNCIONES DE DESCARGA Y CÁLCULO
 # ==========================================
-@st.cache_data(ttl=900)
+@st.cache_data(ttl=300)
 def descargar_datos(tickers, period, interval):
-    # auto_adjust y prepost aseguran descargar los datos más recientes disponibles
+    # Forzar descarga de velas vivas del día
     df = yf.download(
         tickers, 
         period=period, 
         interval=interval, 
         group_by="ticker", 
         progress=False,
-        auto_adjust=True
+        auto_adjust=True,
+        ignore_tz=True
     )
     return df
 
