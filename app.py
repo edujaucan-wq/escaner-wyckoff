@@ -145,7 +145,16 @@ tickers_lista = list(activos_dic.keys())
 # ==========================================
 @st.cache_data(ttl=900)
 def descargar_datos(tickers, period, interval):
-    return yf.download(tickers, period=period, interval=interval, group_by="ticker", progress=False)
+    # auto_adjust y prepost aseguran descargar los datos más recientes disponibles
+    df = yf.download(
+        tickers, 
+        period=period, 
+        interval=interval, 
+        group_by="ticker", 
+        progress=False,
+        auto_adjust=True
+    )
+    return df
 
 def procesar_df_wyckoff(df, p_vol, f_vol, v_rangos, p_tend):
     if len(df) < max(p_vol, p_tend) + 4:
