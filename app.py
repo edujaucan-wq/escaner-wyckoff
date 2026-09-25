@@ -159,7 +159,7 @@ def procesar_df_wyckoff(df, p_vol, f_vol, v_rangos, p_tend):
     if len(df) < max(p_vol, p_tend, 50) + 4:
         return df
     
-    # 1. Volumen y Tendencia (Medias de 20 y 50)
+    # 1. Volumen y Tendencia (SMA 20 y SMA 50)
     df['Vol_SMA'] = df['Volume'].rolling(window=p_vol).mean()
     df['Vol_Ratio'] = df['Volume'] / df['Vol_SMA']
     df['Precio_SMA_Tend'] = df['Close'].rolling(window=p_tend).mean()
@@ -246,7 +246,7 @@ st.dataframe(df_res, use_container_width=True, hide_index=True)
 # 5. VISUALIZADOR DE GRÁFICO CON MACD
 # ==========================================
 st.markdown("---")
-st.subheader(f"📈 Gráfico ({temporalidad}) con Precio, SMA 50, MACD y Señales")
+st.subheader(f"📈 Gráfico ({temporalidad}) con Precio, SMA 20, SMA 50, MACD y Señales")
 
 activo_grafico = st.selectbox(
     "Selecciona un activo para inspeccionar sus puntos:",
@@ -270,21 +270,30 @@ if activo_grafico:
         name="Velas"
     ), row=1, col=1)
 
-    # 2. Línea de Precio de Cierre (para seguir la tendencia con claridad)
+    # 2. Línea de Precio de Cierre (Línea blanca brillante destacada)
     fig.add_trace(go.Scatter(
         x=df_g.index, 
         y=df_g['Close'], 
         mode='lines', 
-        line=dict(color='rgba(255, 255, 255, 0.6)', width=1.5), 
+        line=dict(color='rgba(255, 255, 255, 0.9)', width=2), 
         name="Línea Precio Cierre"
     ), row=1, col=1)
 
-    # 3. Media Móvil SMA 50 (Soporte/Resistencia Institucional)
+    # 3. Media Móvil SMA 20 (Corto Plazo - Cian)
+    fig.add_trace(go.Scatter(
+        x=df_g.index, 
+        y=df_g['SMA20'], 
+        mode='lines', 
+        line=dict(color='#00E5FF', width=1.5), 
+        name="SMA 20 (Corto Plazo)"
+    ), row=1, col=1)
+
+    # 4. Media Móvil SMA 50 (Medio/Largo Plazo - Naranja)
     fig.add_trace(go.Scatter(
         x=df_g.index, 
         y=df_g['SMA50'], 
         mode='lines', 
-        line=dict(color='orange', width=2), 
+        line=dict(color='#FF9100', width=2), 
         name="SMA 50 (Tendencia)"
     ), row=1, col=1)
 
