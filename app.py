@@ -4,10 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# ==========================================
-# CONFIGURACIÓN DE LA PÁGINA
-# ==========================================
-st.set_page_config(page_title="Escáner Wyckoff Multi-Tendencia", layout="wide")
+st.set_page_config(page_title="Escáner Wyckoff + VSA + Divergencias", layout="wide")
 
 # ==========================================
 # 1. CATÁLOGO COMPLETO DE ACTIVOS
@@ -105,243 +102,136 @@ CATALOGO_ACTIVOS = {
 }
 
 # ==========================================
-# 2. BARRA LATERAL (CONTROLES E INPUTS)
+# 2. CONTROLES Y PARÁMETROS
 # ==========================================
-st.sidebar.header("⚙️ Configuración del Escáner")
+st.sidebar.header("⚙️ Parámetros del Escáner")
 
-categoria_sel = st.sidebar.selectbox(
-    "Universo de Activos:",
-    list(CATALOGO_ACTIVOS.keys())
-)
-
-st.sidebar.subheader("⏱️ Temporalidad")
-temporalidad = st.sidebar.radio(
-    "Selecciona la vela:",
-    options=["Semanal", "Diario"],
-    index=0
-)
+categoria_sel = st.sidebar.selectbox("Universo de Activos:", list(CATALOGO_ACTIVOS.keys()))
+temporalidad = st.sidebar.radio("Temporalidad:", options=["Semanal", "Diario"], index=0)
 
 intervalo_yf = "1wk" if temporalidad == "Semanal" else "1d"
 periodo_yf = "3y" if temporalidad == "Semanal" else "1y"
-sufijo_tiempo = "semanas" if temporalidad == "Semanal" else "días"
 
-st.sidebar.subheader("Filtro de Tendencia Macro")
-periodo_tendencia = st.sidebar.radio(
-    "Evaluación de Tendencia:",
-    options=[20, 50],
-    format_func=lambda x: f"Media Móvil {x} {sufijo_tiempo} ({'Medio Plazo' if x==20 else 'Largo Plazo'})",
-    index=1
-)
-
-st.sidebar.subheader("Parámetros Wyckoff")
-periodo_volumen = st.sidebar.slider(f"Media Móvil Volumen ({sufijo_tiempo.capitalize()})", min_value=5, max_value=50, value=20)
-factor_volumen = st.sidebar.slider("Factor Volumen Inusual", min_value=1.1, max_value=3.0, value=1.5, step=0.1)
-ventana_rangos = st.sidebar.slider("Ventana de Mínimos/Máximos", min_value=4, max_value=52, value=12)
+factor_volumen = st.sidebar.slider("Factor Volumen Inusual", 1.1, 3.0, 1.5, 0.1)
+ventana_rangos = st.sidebar.slider("Ventana Soportes/Resistencias", 4, 52, 12)
 
 activos_dic = CATALOGO_ACTIVOS[categoria_sel]
 tickers_lista = list(activos_dic.keys())
 
 # ==========================================
-# 3. FUNCIONES DE DESCARGA Y CÁLCULO
+# 3. CÁLCULOS Y PROCESAMIENTO
 # ==========================================
 @st.cache_data(ttl=300)
 def descargar_datos(tickers, period, interval):
-    df = yf.download(tickers, period=period, interval=interval, group_by="ticker", progress=False, auto_adjust=True)
-    try:
-        df_hoy = yf.download(tickers, period="5d", interval=interval, group_by="ticker", progress=False, auto_adjust=True)
-        df = df.combine_first(df_hoy)
-    except Exception:
-        pass
-    return df
+    return yf.download(tickers, period=period, interval=interval, group_by="ticker", progress=False, auto_adjust=True)
 
-def procesar_df_wyckoff(df, p_vol, f_vol, v_rangos, p_tend):
-    if len(df) < max(p_vol, p_tend, 50) + 4:
+def procesar_datos(df, f_vol, v_rangos):
+    if len(df) < 50:
         return df
-    
-    # 1. Volumen y Medias Móviles
-    df['Vol_SMA'] = df['Volume'].rolling(window=p_vol).mean()
+
+    df['Vol_SMA'] = df['Volume'].rolling(window=20).mean()
     df['Vol_Ratio'] = df['Volume'] / df['Vol_SMA']
-    df['Precio_SMA_Tend'] = df['Close'].rolling(window=p_tend).mean()
-    df['SMA_Pendiente'] = df['Precio_SMA_Tend'] - df['Precio_SMA_Tend'].shift(4)
     df['SMA20'] = df['Close'].rolling(window=20).mean()
     df['SMA50'] = df['Close'].rolling(window=50).mean()
-    
-    # Referencias de Techo/Suelo previo (sin incluir la vela actual)
+
     df['Min_Previo'] = df['Low'].shift(1).rolling(window=v_rangos).min()
     df['Max_Previo'] = df['High'].shift(1).rolling(window=v_rangos).max()
-    
-    # 2. MACD (12, 26, 9)
+
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = ema12 - ema26
     df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
-    
+
+    delta = df['Close'].diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+    rs = gain / loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+
     df['MACD_Giro_Alcista'] = df['MACD_Hist'] > df['MACD_Hist'].shift(1)
     df['MACD_Giro_Bajista'] = df['MACD_Hist'] < df['MACD_Hist'].shift(1)
-    
-    # 3. Interacciones con Volumen en Soportes / Resistencias
+
     df['Test_Suelo'] = (df['Vol_Ratio'] >= f_vol) & (df['Low'] <= df['Min_Previo'])
     df['Test_Techo'] = (df['Vol_Ratio'] >= f_vol) & (df['High'] >= df['Max_Previo'])
-    
-    # --- SEÑALES DE IMPULSO ALCISTA CONFIRMADO (🚀 COHETE) ---
-    # A) Spring Élite: Barrido de mínimos con giro alcista de MACD
-    spring_e = df['Test_Suelo'] & df['MACD_Giro_Alcista']
-    # B) Absorción de Resistencia: Ruptura con volumen + MACD en zona positiva subiendo + Precio > SMA20
-    absorcion_alcista = df['Test_Techo'] & (df['MACD_Hist'] > 0) & df['MACD_Giro_Alcista'] & (df['Close'] >= df['SMA20'])
-    
-    df['Señal_Subida'] = spring_e | absorcion_alcista
 
-    # --- SEÑALES DE IMPULSO BAJISTA CONFIRMADO (💩 CAÍDA) ---
-    # A) Upthrust Élite: Testeo de techo con giro bajista de MACD
-    upthrust_e = df['Test_Techo'] & df['MACD_Giro_Bajista']
-    # B) Fallo de Spring / Ruptura de Soporte: Pérdida de suelo con volumen + MACD fuertemente negativo
-    caida_libre = df['Test_Suelo'] & (df['MACD_Hist'] < 0) & df['MACD_Giro_Bajista']
-    
-    df['Señal_Bajada'] = upthrust_e | caida_libre
+    df['Señal_Subida'] = (df['Test_Suelo'] & df['MACD_Giro_Alcista'] & (df['RSI'] < 50)) | \
+                        (df['Test_Techo'] & (df['MACD_Hist'] > 0) & df['MACD_Giro_Alcista'] & (df['Close'] >= df['SMA20']))
 
-    def evaluar_tendencia(row):
-        if row['Close'] >= row['Precio_SMA_Tend'] and row['SMA_Pendiente'] > 0:
-            return "🟢 ALCISTA FUERTE"
-        elif row['Close'] < row['Precio_SMA_Tend'] and row['SMA_Pendiente'] < 0:
-            return "🔴 BAJISTA FUERTE"
-        else:
-            return "🟡 LATERAL / TRANSICIÓN"
+    df['Señal_Bajada'] = (df['Test_Techo'] & df['MACD_Giro_Bajista'] & (df['RSI'] > 50)) | \
+                        (df['Test_Suelo'] & (df['MACD_Hist'] < 0) & df['MACD_Giro_Bajista'])
 
-    df['Tendencia'] = df.apply(evaluar_tendencia, axis=1)
     return df
 
 # ==========================================
-# 4. EJECUCIÓN PRINCIPAL Y TABLA
+# 4. TABLA RESUMEN
 # ==========================================
-st.title("📊 Escáner Wyckoff + MACD: Detección Institucional")
-st.write(f"Categoría activa: **{categoria_sel}** | Temporalidad: **{temporalidad}** | Tendencia a **{periodo_tendencia} {sufijo_tiempo}**")
+st.title("📊 Detección Wyckoff + VSA + RSI")
+st.write(f"Categoría: **{categoria_sel}** | Vela: **{temporalidad}**")
 
 datos = descargar_datos(tickers_lista, periodo_yf, intervalo_yf)
 resultados = []
 
 for ticker in tickers_lista:
     try:
-        df_activo = datos.copy() if len(tickers_lista) == 1 else datos[ticker].dropna()
-        df_activo = procesar_df_wyckoff(df_activo, periodo_volumen, factor_volumen, ventana_rangos, periodo_tendencia)
-        
-        if not df_activo.empty and len(df_activo) >= periodo_tendencia:
-            ultima = df_activo.iloc[-1]
+        df_a = datos.copy() if len(tickers_lista) == 1 else datos[ticker].dropna()
+        df_a = procesar_datos(df_a, factor_volumen, ventana_rangos)
+
+        if not df_a.empty and len(df_a) >= 50:
+            u = df_a.iloc[-1]
             estado = "NEUTRAL"
-            
-            if ultima['Señal_Subida']:
-                estado = "🚀 SUBIDA PROBABLE (Acumulación / Absorción)"
-            elif ultima['Señal_Bajada']:
-                estado = "💩 CAÍDA PROBABLE (Distribución / Pérdida Soporte)"
-                
+            if u['Señal_Subida']:
+                estado = "🚀 SUBIDA PROBABLE"
+            elif u['Señal_Bajada']:
+                estado = "💩 CAÍDA PROBABLE"
+
             resultados.append({
                 "Ticker": ticker,
                 "Nombre": activos_dic[ticker],
-                "Precio Cierre": round(float(ultima['Close']), 2),
-                "Tendencia Macro": ultima['Tendencia'],
-                "Ratio Vol": f"{round(float(ultima['Vol_Ratio']), 2)}x",
-                "Predicción Wyckoff + MACD": estado
+                "Precio Cierre": round(float(u['Close']), 2),
+                "Volumen Relativo": f"{round(float(u['Vol_Ratio']), 2)}x",
+                "RSI (14)": round(float(u['RSI']), 1),
+                "Predicción": estado
             })
     except Exception:
         pass
 
-df_res = pd.DataFrame(resultados)
-st.dataframe(df_res, use_container_width=True, hide_index=True)
+st.dataframe(pd.DataFrame(resultados), use_container_width=True, hide_index=True)
 
 # ==========================================
-# 5. VISUALIZADOR DE GRÁFICO CON MACD
+# 5. GRÁFICO INTERACTIVO
 # ==========================================
 st.markdown("---")
-st.subheader(f"📈 Gráfico ({temporalidad}) con Precio, SMA 20, SMA 50, MACD y Señales")
-
-activo_grafico = st.selectbox(
-    "Selecciona un activo para inspeccionar sus puntos:",
-    options=tickers_lista,
-    format_func=lambda x: f"{x} - {activos_dic[x]}"
-)
+activo_grafico = st.selectbox("Selecciona un activo para analizar:", options=tickers_lista, format_func=lambda x: f"{x} - {activos_dic[x]}")
 
 if activo_grafico:
     df_g = datos.copy() if len(tickers_lista) == 1 else datos[activo_grafico].dropna()
-    df_g = procesar_df_wyckoff(df_g, periodo_volumen, factor_volumen, ventana_rangos, periodo_tendencia)
-    
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
+    df_g = procesar_datos(df_g, factor_volumen, ventana_rangos)
 
-    # 1. Velas Japonesas
-    fig.add_trace(go.Candlestick(
-        x=df_g.index, 
-        open=df_g['Open'], 
-        high=df_g['High'], 
-        low=df_g['Low'], 
-        close=df_g['Close'], 
-        name="Velas"
-    ), row=1, col=1)
+    fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.02, row_heights=[0.5, 0.25, 0.25])
 
-    # 2. Línea de Precio de Cierre (Amarillo Neón)
-    fig.add_trace(go.Scatter(
-        x=df_g.index, 
-        y=df_g['Close'], 
-        mode='lines', 
-        line=dict(color='#FFFF00', width=2.5), 
-        name="Línea Precio Cierre"
-    ), row=1, col=1)
+    # Precio + Marcadores 🚀 / 💩
+    fig.add_trace(go.Candlestick(x=df_g.index, open=df_g['Open'], high=df_g['High'], low=df_g['Low'], close=df_g['Close'], name="Velas"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_g.index, y=df_g['Close'], mode='lines', line=dict(color='#FFFF00', width=2), name="Cierre (Amarillo)"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_g.index, y=df_g['SMA20'], mode='lines', line=dict(color='#00E5FF', width=1), name="SMA 20"), row=1, col=1)
 
-    # 3. Media Móvil SMA 20 (Cian)
-    fig.add_trace(go.Scatter(
-        x=df_g.index, 
-        y=df_g['SMA20'], 
-        mode='lines', 
-        line=dict(color='#00E5FF', width=1.5), 
-        name="SMA 20 (Corto Plazo)"
-    ), row=1, col=1)
-
-    # 4. Media Móvil SMA 50 (Naranja)
-    fig.add_trace(go.Scatter(
-        x=df_g.index, 
-        y=df_g['SMA50'], 
-        mode='lines', 
-        line=dict(color='#FF9100', width=2), 
-        name="SMA 50 (Tendencia)"
-    ), row=1, col=1)
-
-    # Marcadores visuales simplificados
     subidas = df_g[df_g['Señal_Subida']]
     bajadas = df_g[df_g['Señal_Bajada']]
 
-    # A) SUBIDA PROBABLE (🚀 Cohete debajo del mínimo de la vela)
     if not subidas.empty:
-        fig.add_trace(go.Scatter(
-            x=subidas.index, 
-            y=subidas['Low']*0.98, 
-            mode='text', 
-            text=['🚀']*len(subidas), 
-            textfont=dict(size=22),
-            textposition='bottom center', 
-            name="Impulso Alcista (🚀)"
-        ), row=1, col=1)
+        fig.add_trace(go.Scatter(x=subidas.index, y=subidas['Low']*0.98, mode='text', text=['🚀']*len(subidas), textfont=dict(size=20), textposition='bottom center', name="Alcista"), row=1, col=1)
 
-    # B) CAÍDA PROBABLE (💩 Caca encima del máximo de la vela)
     if not bajadas.empty:
-        fig.add_trace(go.Scatter(
-            x=bajadas.index, 
-            y=bajadas['High']*1.02, 
-            mode='text', 
-            text=['💩']*len(bajadas), 
-            textfont=dict(size=22),
-            textposition='top center', 
-            name="Impulso Bajista (💩)"
-        ), row=1, col=1)
+        fig.add_trace(go.Scatter(x=bajadas.index, y=bajadas['High']*1.02, mode='text', text=['💩']*len(bajadas), textfont=dict(size=20), textposition='top center', name="Bajista"), row=1, col=1)
 
-    # Fila 2: Indicador MACD e Histograma
-    fig.add_trace(go.Scatter(x=df_g.index, y=df_g['MACD'], mode='lines', line=dict(color='cyan', width=1.5), name="MACD"), row=2, col=1)
-    fig.add_trace(go.Scatter(x=df_g.index, y=df_g['MACD_Signal'], mode='lines', line=dict(color='orange', width=1.5), name="Señal"), row=2, col=1)
-    colores_hist = ['green' if val >= 0 else 'red' for val in df_g['MACD_Hist']]
-    fig.add_trace(go.Bar(x=df_g.index, y=df_g['MACD_Hist'], marker_color=colores_hist, name="Histograma"), row=2, col=1)
+    # MACD
+    colores_hist = ['green' if v >= 0 else 'red' for v in df_g['MACD_Hist']]
+    fig.add_trace(go.Bar(x=df_g.index, y=df_g['MACD_Hist'], marker_color=colores_hist, name="Hist. MACD"), row=2, col=1)
 
-    fig.update_layout(
-        title=f"Wyckoff + MACD: {activo_grafico}", 
-        template="plotly_dark", 
-        height=700, 
-        xaxis_rangeslider_visible=False,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
+    # RSI
+    fig.add_trace(go.Scatter(x=df_g.index, y=df_g['RSI'], mode='lines', line=dict(color='purple', width=1.5), name="RSI"), row=3, col=1)
+    fig.add_hline(y=70, line_dash="dash", line_color="red", row=3, col=1)
+    fig.add_hline(y=30, line_dash="dash", line_color="green", row=3, col=1)
+
+    fig.update_layout(template="plotly_dark", height=750, xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
