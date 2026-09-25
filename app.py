@@ -158,7 +158,7 @@ def procesar_df_wyckoff(df, p_vol, f_vol, v_rangos, p_tend):
     if len(df) < max(p_vol, p_tend, 50) + 4:
         return df
     
-    # 1. Volumen, Medias y Rangos Previos (excluyendo la vela actual para evitar sesgo)
+    # 1. Volumen y Medias Móviles
     df['Vol_SMA'] = df['Volume'].rolling(window=p_vol).mean()
     df['Vol_Ratio'] = df['Volume'] / df['Vol_SMA']
     df['Precio_SMA_Tend'] = df['Close'].rolling(window=p_tend).mean()
@@ -166,37 +166,39 @@ def procesar_df_wyckoff(df, p_vol, f_vol, v_rangos, p_tend):
     df['SMA20'] = df['Close'].rolling(window=20).mean()
     df['SMA50'] = df['Close'].rolling(window=50).mean()
     
-    # Referencias de Techo/Suelo previo
+    # Referencias de Techo/Suelo previo (sin incluir la vela actual)
     df['Min_Previo'] = df['Low'].shift(1).rolling(window=v_rangos).min()
     df['Max_Previo'] = df['High'].shift(1).rolling(window=v_rangos).max()
     
-    # 2. Indicador MACD (12, 26, 9)
+    # 2. MACD (12, 26, 9)
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
     df['MACD'] = ema12 - ema26
     df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
     
-    # 3. Giros e Inflexiones del MACD
     df['MACD_Giro_Alcista'] = df['MACD_Hist'] > df['MACD_Hist'].shift(1)
     df['MACD_Giro_Bajista'] = df['MACD_Hist'] < df['MACD_Hist'].shift(1)
     
-    # 4. Detección Wyckoff + MACD Re-calibrada
-    # Test/Ruptura de suelo o techo previo con volumen inusual
-    df['Es_Spring'] = (df['Vol_Ratio'] >= f_vol) & (df['Low'] <= df['Min_Previo'])
-    df['Es_Upthrust'] = (df['Vol_Ratio'] >= f_vol) & (df['High'] >= df['Max_Previo'])
+    # 3. Interacciones con Volumen en Soportes / Resistencias
+    df['Test_Suelo'] = (df['Vol_Ratio'] >= f_vol) & (df['Low'] <= df['Min_Previo'])
+    df['Test_Techo'] = (df['Vol_Ratio'] >= f_vol) & (df['High'] >= df['Max_Previo'])
     
-    # Spring Élite: Ruptura de suelo + Giro alcista de MACD
-    df['Spring_Elite'] = df['Es_Spring'] & df['MACD_Giro_Alcista']
+    # --- SEÑALES DE IMPULSO ALCISTA CONFIRMADO (🚀 COHETE) ---
+    # A) Spring Élite: Barrido de mínimos con giro alcista de MACD
+    spring_e = df['Test_Suelo'] & df['MACD_Giro_Alcista']
+    # B) Absorción de Resistencia: Ruptura con volumen + MACD en zona positiva subiendo + Precio > SMA20
+    absorcion_alcista = df['Test_Techo'] & (df['MACD_Hist'] > 0) & df['MACD_Giro_Alcista'] & (df['Close'] >= df['SMA20'])
     
-    # Fallo Spring: Ruptura de suelo + MACD marcadamente bajista
-    df['Spring_Fallo'] = df['Es_Spring'] & (df['MACD_Hist'] < 0) & df['MACD_Giro_Bajista']
+    df['Señal_Subida'] = spring_e | absorcion_alcista
+
+    # --- SEÑALES DE IMPULSO BAJISTA CONFIRMADO (💩 CAÍDA) ---
+    # A) Upthrust Élite: Testeo de techo con giro bajista de MACD
+    upthrust_e = df['Test_Techo'] & df['MACD_Giro_Bajista']
+    # B) Fallo de Spring / Ruptura de Soporte: Pérdida de suelo con volumen + MACD fuertemente negativo
+    caida_libre = df['Test_Suelo'] & (df['MACD_Hist'] < 0) & df['MACD_Giro_Bajista']
     
-    # Upthrust Élite: Testeo de techo + Giro bajista de MACD (Distribución)
-    df['Upthrust_Elite'] = df['Es_Upthrust'] & df['MACD_Giro_Bajista']
-    
-    # Regalo de Trullas / Fallo de Upthrust: Testeo de techo con volumen + MACD Fuertemente ALCISTA (Absorción)
-    df['Upthrust_Fallo'] = df['Es_Upthrust'] & (df['MACD_Hist'] > 0) & df['MACD_Giro_Alcista']
+    df['Señal_Bajada'] = upthrust_e | caida_libre
 
     def evaluar_tendencia(row):
         if row['Close'] >= row['Precio_SMA_Tend'] and row['SMA_Pendiente'] > 0:
@@ -227,14 +229,10 @@ for ticker in tickers_lista:
             ultima = df_activo.iloc[-1]
             estado = "NEUTRAL"
             
-            if ultima['Spring_Elite']:
-                estado = "🚀 SPRING ÉLITE (Acumulación Alcista)"
-            elif ultima['Spring_Fallo']:
-                estado = "⚠️ FALLO SPRING (Caída Libre / Venta Real)"
-            elif ultima['Upthrust_Elite']:
-                estado = "🔴 UPTHRUST ÉLITE (Distribución Bajista)"
-            elif ultima['Upthrust_Fallo']:
-                estado = "🎁 REGALO DE TRULLAS (Absorción Alcista)"
+            if ultima['Señal_Subida']:
+                estado = "🚀 SUBIDA PROBABLE (Acumulación / Absorción)"
+            elif ultima['Señal_Bajada']:
+                estado = "💩 CAÍDA PROBABLE (Distribución / Pérdida Soporte)"
                 
             resultados.append({
                 "Ticker": ticker,
@@ -242,7 +240,7 @@ for ticker in tickers_lista:
                 "Precio Cierre": round(float(ultima['Close']), 2),
                 "Tendencia Macro": ultima['Tendencia'],
                 "Ratio Vol": f"{round(float(ultima['Vol_Ratio']), 2)}x",
-                "Estado Wyckoff + MACD": estado
+                "Predicción Wyckoff + MACD": estado
             })
     except Exception:
         pass
@@ -278,7 +276,7 @@ if activo_grafico:
         name="Velas"
     ), row=1, col=1)
 
-    # 2. LÍNEA DE PRECIO DE CIERRE (AMARILLO NEÓN DESTACADO)
+    # 2. Línea de Precio de Cierre (Amarillo Neón)
     fig.add_trace(go.Scatter(
         x=df_g.index, 
         y=df_g['Close'], 
@@ -305,58 +303,32 @@ if activo_grafico:
         name="SMA 50 (Tendencia)"
     ), row=1, col=1)
 
-    # Marcadores de Señales Wyckoff + MACD
-    springs_e = df_g[df_g['Spring_Elite']]
-    springs_f = df_g[df_g['Spring_Fallo']]
-    upthrusts_e = df_g[df_g['Upthrust_Elite']]
-    upthrusts_f = df_g[df_g['Upthrust_Fallo']]
+    # Marcadores visuales simplificados
+    subidas = df_g[df_g['Señal_Subida']]
+    bajadas = df_g[df_g['Señal_Bajada']]
 
-    # A) COMPRA: Spring Élite (Flecha verde arriba)
-    if not springs_e.empty:
+    # A) SUBIDA PROBABLE (🚀 Cohete debajo del mínimo de la vela)
+    if not subidas.empty:
         fig.add_trace(go.Scatter(
-            x=springs_e.index, 
-            y=springs_e['Low']*0.98, 
-            mode='markers+text', 
-            marker=dict(symbol='triangle-up', size=14, color='lime'), 
-            text=['🚀 Spring Élite']*len(springs_e), 
+            x=subidas.index, 
+            y=subidas['Low']*0.98, 
+            mode='text', 
+            text=['🚀']*len(subidas), 
+            textfont=dict(size=22),
             textposition='bottom center', 
-            name="Spring Élite (Compra)"
+            name="Impulso Alcista (🚀)"
         ), row=1, col=1)
 
-    # B) COMPRA: Fallo Upthrust / Regalo de Trullas (Diamante violeta arriba)
-    if not upthrusts_f.empty:
+    # B) CAÍDA PROBABLE (💩 Caca encima del máximo de la vela)
+    if not bajadas.empty:
         fig.add_trace(go.Scatter(
-            x=upthrusts_f.index, 
-            y=upthrusts_f['High']*1.02, 
-            mode='markers+text', 
-            marker=dict(symbol='diamond', size=14, color='#D000FF'), 
-            text=['🎁 Regalo Trullas']*len(upthrusts_f), 
+            x=bajadas.index, 
+            y=bajadas['High']*1.02, 
+            mode='text', 
+            text=['💩']*len(bajadas), 
+            textfont=dict(size=22),
             textposition='top center', 
-            name="Regalo Trullas (Absorción Alcista)"
-        ), row=1, col=1)
-
-    # C) VENTA: Upthrust Élite (Flecha roja abajo)
-    if not upthrusts_e.empty:
-        fig.add_trace(go.Scatter(
-            x=upthrusts_e.index, 
-            y=upthrusts_e['High']*1.02, 
-            mode='markers+text', 
-            marker=dict(symbol='triangle-down', size=14, color='red'), 
-            text=['🔴 Upthrust Élite']*len(upthrusts_e), 
-            textposition='top center', 
-            name="Upthrust Élite (Venta)"
-        ), row=1, col=1)
-
-    # D) PELIGRO: Fallo Spring (Triángulo amarillo abajo)
-    if not springs_f.empty:
-        fig.add_trace(go.Scatter(
-            x=springs_f.index, 
-            y=springs_f['Low']*0.98, 
-            mode='markers+text', 
-            marker=dict(symbol='triangle-down-open', size=12, color='yellow'), 
-            text=['⚠️ Fallo Spring']*len(springs_f), 
-            textposition='bottom center', 
-            name="Fallo Spring (Caída Libre)"
+            name="Impulso Bajista (💩)"
         ), row=1, col=1)
 
     # Fila 2: Indicador MACD e Histograma
