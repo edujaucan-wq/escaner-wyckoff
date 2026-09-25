@@ -116,7 +116,7 @@ def ejecutar_escaneo():
     print(f"Buscando señales en {len(tickers_lista)} activos...")
     
     # Descarga de datos
-    datos = yf.download(tickers_lista, period="6m", interval="1d", group_by="ticker", progress=False, auto_adjust=True)
+    datos = yf.download(tickers_lista, period="6mo", interval="1d", group_by="ticker", progress=False, auto_adjust=True)
     
     for ticker in tickers_lista:
         try:
