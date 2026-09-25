@@ -2,6 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # ==========================================
 # CONFIGURACIÓN DE LA PÁGINA
@@ -145,38 +146,48 @@ tickers_lista = list(activos_dic.keys())
 # ==========================================
 @st.cache_data(ttl=300)
 def descargar_datos(tickers, period, interval):
-    # Forzar descarga de velas vivas del día
-    df = yf.download(
-        tickers, 
-        period=period, 
-        interval=interval, 
-        group_by="ticker", 
-        progress=False,
-        auto_adjust=True,
-        ignore_tz=True
-    )
+    df = yf.download(tickers, period=period, interval=interval, group_by="ticker", progress=False, auto_adjust=True)
+    try:
+        df_hoy = yf.download(tickers, period="5d", interval=interval, group_by="ticker", progress=False, auto_adjust=True)
+        df = df.combine_first(df_hoy)
+    except Exception:
+        pass
     return df
 
 def procesar_df_wyckoff(df, p_vol, f_vol, v_rangos, p_tend):
-    if len(df) < max(p_vol, p_tend) + 4:
+    if len(df) < max(p_vol, p_tend, 35) + 4:
         return df
     
-    # Media de Volumen
+    # 1. Volumen y Tendencia
     df['Vol_SMA'] = df['Volume'].rolling(window=p_vol).mean()
     df['Vol_Ratio'] = df['Volume'] / df['Vol_SMA']
-    
-    # Media Móvil de Tendencia Configurable (SMA20 o SMA50)
     df['Precio_SMA_Tend'] = df['Close'].rolling(window=p_tend).mean()
     df['SMA_Pendiente'] = df['Precio_SMA_Tend'] - df['Precio_SMA_Tend'].shift(4)
-    
-    # Media SMA20 auxiliar para el gráfico
     df['SMA20'] = df['Close'].rolling(window=20).mean()
-    
-    # Mínimos y Máximos móviles
     df['Min_Reciente'] = df['Close'].rolling(window=v_rangos).min()
     df['Max_Reciente'] = df['Close'].rolling(window=v_rangos).max()
     
-    # Evaluación de Tendencia con Pendiente
+    # 2. Indicador MACD (12, 26, 9)
+    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
+    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = ema12 - ema26
+    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
+    
+    # 3. Giros e Inflexiones de MACD
+    df['MACD_Giro_Alcista'] = df['MACD_Hist'] > df['MACD_Hist'].shift(1)
+    df['MACD_Giro_Bajista'] = df['MACD_Hist'] < df['MACD_Hist'].shift(1)
+    
+    # 4. Señales Wyckoff + Filtro MACD + Detección de Fallos
+    df['Es_Spring'] = (df['Vol_Ratio'] >= f_vol) & (df['Close'] <= df['Min_Reciente'])
+    df['Es_Upthrust'] = (df['Vol_Ratio'] >= f_vol) & (df['Close'] >= df['Max_Reciente'])
+    
+    df['Spring_Elite'] = df['Es_Spring'] & df['MACD_Giro_Alcista']
+    df['Spring_Fallo'] = df['Es_Spring'] & (~df['MACD_Giro_Alcista'])
+    
+    df['Upthrust_Elite'] = df['Es_Upthrust'] & df['MACD_Giro_Bajista']
+    df['Upthrust_Fallo'] = df['Es_Upthrust'] & (~df['MACD_Giro_Bajista'])
+
     def evaluar_tendencia(row):
         if row['Close'] >= row['Precio_SMA_Tend'] and row['SMA_Pendiente'] > 0:
             return "🟢 ALCISTA FUERTE"
@@ -186,37 +197,34 @@ def procesar_df_wyckoff(df, p_vol, f_vol, v_rangos, p_tend):
             return "🟡 LATERAL / TRANSICIÓN"
 
     df['Tendencia'] = df.apply(evaluar_tendencia, axis=1)
-    df['Es_Spring'] = (df['Vol_Ratio'] >= f_vol) & (df['Close'] <= df['Min_Reciente'])
-    df['Es_Upthrust'] = (df['Vol_Ratio'] >= f_vol) & (df['Close'] >= df['Max_Reciente'])
-    
     return df
 
 # ==========================================
 # 4. EJECUCIÓN PRINCIPAL Y TABLA
 # ==========================================
-st.title("📊 Escáner Wyckoff: Análisis Multitendencia")
-st.write(f"Categoría activa: **{categoria_sel}** | Temporalidad: **{temporalidad}** | Tendencia calculada a **{periodo_tendencia} {sufijo_tiempo}**")
+st.title("📊 Escáner Wyckoff + MACD: Detección Institucional")
+st.write(f"Categoría activa: **{categoria_sel}** | Temporalidad: **{temporalidad}** | Tendencia a **{periodo_tendencia} {sufijo_tiempo}**")
 
 datos = descargar_datos(tickers_lista, periodo_yf, intervalo_yf)
 resultados = []
 
 for ticker in tickers_lista:
     try:
-        if len(tickers_lista) == 1:
-            df_activo = datos.copy()
-        else:
-            df_activo = datos[ticker].dropna()
-            
+        df_activo = datos.copy() if len(tickers_lista) == 1 else datos[ticker].dropna()
         df_activo = procesar_df_wyckoff(df_activo, periodo_volumen, factor_volumen, ventana_rangos, periodo_tendencia)
         
         if not df_activo.empty and len(df_activo) >= periodo_tendencia:
             ultima = df_activo.iloc[-1]
-            
             estado = "NEUTRAL"
-            if ultima['Es_Spring']:
-                estado = "🟢 SPRING / ACUMULACIÓN"
-            elif ultima['Es_Upthrust']:
-                estado = "🔴 UPTHRUST / DISTRIBUCIÓN"
+            
+            if ultima['Spring_Elite']:
+                estado = "🚀 SPRING ÉLITE (Confirmado MACD)"
+            elif ultima['Spring_Fallo']:
+                estado = "⚠️ SPRING DUDOSO (Fallo/Trampa MACD)"
+            elif ultima['Upthrust_Elite']:
+                estado = "🔴 UPTHRUST ÉLITE (Confirmado MACD)"
+            elif ultima['Upthrust_Fallo']:
+                estado = "⚠️ UPTHRUST DUDOSO (Fallo/Trampa MACD)"
                 
             resultados.append({
                 "Ticker": ticker,
@@ -224,7 +232,7 @@ for ticker in tickers_lista:
                 "Precio Cierre": round(float(ultima['Close']), 2),
                 "Tendencia Macro": ultima['Tendencia'],
                 "Ratio Vol": f"{round(float(ultima['Vol_Ratio']), 2)}x",
-                "Estado Wyckoff": estado
+                "Estado Wyckoff + MACD": estado
             })
     except Exception:
         pass
@@ -233,10 +241,10 @@ df_res = pd.DataFrame(resultados)
 st.dataframe(df_res, use_container_width=True, hide_index=True)
 
 # ==========================================
-# 5. VISUALIZADOR DE GRÁFICO DETALLADO
+# 5. VISUALIZADOR DE GRÁFICO CON MACD
 # ==========================================
 st.markdown("---")
-st.subheader(f"📈 Gráfico ({temporalidad}) con Medias Móviles y Flechas Wyckoff")
+st.subheader(f"📈 Gráfico ({temporalidad}) con Medias Móviles, MACD y Señales")
 
 activo_grafico = st.selectbox(
     "Selecciona un activo para inspeccionar sus puntos:",
@@ -245,78 +253,37 @@ activo_grafico = st.selectbox(
 )
 
 if activo_grafico:
-    if len(tickers_lista) == 1:
-        df_g = datos.copy()
-    else:
-        df_g = datos[activo_grafico].dropna()
-        
+    df_g = datos.copy() if len(tickers_lista) == 1 else datos[activo_grafico].dropna()
     df_g = procesar_df_wyckoff(df_g, periodo_volumen, factor_volumen, ventana_rangos, periodo_tendencia)
     
-    springs = df_g[df_g['Es_Spring']]
-    upthrusts = df_g[df_g['Es_Upthrust']]
-    
-    fig = go.Figure()
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
 
-    # Velas Japonesas
-    fig.add_trace(go.Candlestick(
-        x=df_g.index,
-        open=df_g['Open'],
-        high=df_g['High'],
-        low=df_g['Low'],
-        close=df_g['Close'],
-        name="Precio"
-    ))
+    # Fila 1: Precio y Medias
+    fig.add_trace(go.Candlestick(x=df_g.index, open=df_g['Open'], high=df_g['High'], low=df_g['Low'], close=df_g['Close'], name="Precio"), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df_g.index, y=df_g['SMA20'], mode='lines', line=dict(color='orange', width=1.5), name="SMA 20"), row=1, col=1)
 
-    # Media Móvil 20 sem/días (Naranja)
-    fig.add_trace(go.Scatter(
-        x=df_g.index,
-        y=df_g['SMA20'],
-        mode='lines',
-        line=dict(color='orange', width=1.5),
-        name=f"SMA 20 {sufijo_tiempo} (Medio Plazo)"
-    ))
+    # Marcadores de Señales Wyckoff + MACD
+    springs_e = df_g[df_g['Spring_Elite']]
+    springs_f = df_g[df_g['Spring_Fallo']]
+    upthrusts_e = df_g[df_g['Upthrust_Elite']]
+    upthrusts_f = df_g[df_g['Upthrust_Fallo']]
 
-    # Media Móvil de Tendencia seleccionada (Azul) si no es la de 20
-    if periodo_tendencia != 20:
-        fig.add_trace(go.Scatter(
-            x=df_g.index,
-            y=df_g['Precio_SMA_Tend'],
-            mode='lines',
-            line=dict(color='cyan', width=2),
-            name=f"SMA {periodo_tendencia} {sufijo_tiempo} (Largo Plazo)"
-        ))
+    if not springs_e.empty:
+        fig.add_trace(go.Scatter(x=springs_e.index, y=springs_e['Low']*0.98, mode='markers+text', marker=dict(symbol='triangle-up', size=14, color='lime'), text=['🚀 Spring Élite']*len(springs_e), textposition='bottom center', name="Spring Élite"), row=1, col=1)
+    if not springs_f.empty:
+        fig.add_trace(go.Scatter(x=springs_f.index, y=springs_f['Low']*0.98, mode='markers+text', marker=dict(symbol='triangle-up', size=10, color='yellow'), text=['⚠️ Spring Fallo MACD']*len(springs_f), textposition='bottom center', name="Spring Fallo"), row=1, col=1)
 
-    # Flechas Verdes (Springs)
-    if not springs.empty:
-        fig.add_trace(go.Scatter(
-            x=springs.index,
-            y=springs['Low'] * 0.98,
-            mode='markers+text',
-            marker=dict(symbol='triangle-up', size=14, color='lime'),
-            text=['🟢 Spring'] * len(springs),
-            textposition='bottom center',
-            name="Spring (Acumulación)"
-        ))
+    if not upthrusts_e.empty:
+        fig.add_trace(go.Scatter(x=upthrusts_e.index, y=upthrusts_e['High']*1.02, mode='markers+text', marker=dict(symbol='triangle-down', size=14, color='red'), text=['🔴 Upthrust Élite']*len(upthrusts_e), textposition='top center', name="Upthrust Élite"), row=1, col=1)
+    if not upthrusts_f.empty:
+        fig.add_trace(go.Scatter(x=upthrusts_f.index, y=upthrusts_f['High']*1.02, mode='markers+text', marker=dict(symbol='triangle-down', size=10, color='orange'), text=['⚠️ Upthrust Fallo MACD']*len(upthrusts_f), textposition='top center', name="Upthrust Fallo"), row=1, col=1)
 
-    # Flechas Rojas (Upthrusts)
-    if not upthrusts.empty:
-        fig.add_trace(go.Scatter(
-            x=upthrusts.index,
-            y=upthrusts['High'] * 1.02,
-            mode='markers+text',
-            marker=dict(symbol='triangle-down', size=14, color='red'),
-            text=['🔴 Upthrust'] * len(upthrusts),
-            textposition='top center',
-            name="Upthrust (Distribución)"
-        ))
+    # Fila 2: Indicador MACD e Histograma
+    fig.add_trace(go.Scatter(x=df_g.index, y=df_g['MACD'], mode='lines', line=dict(color='cyan', width=1.5), name="MACD"), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df_g.index, y=df_g['MACD_Signal'], mode='lines', line=dict(color='orange', width=1.5), name="Señal"), row=2, col=1)
+    colores_hist = ['green' if val >= 0 else 'red' for val in df_g['MACD_Hist']]
+    fig.add_trace(go.Bar(x=df_g.index, y=df_g['MACD_Hist'], marker_color=colores_hist, name="Histograma"), row=2, col=1)
 
-    fig.update_layout(
-        title=f"Análisis Técnico Wyckoff [{temporalidad}]: {activo_grafico} ({activos_dic[activo_grafico]})",
-        yaxis_title="Precio ($ / €)",
-        xaxis_rangeslider_visible=False,
-        template="plotly_dark",
-        height=550,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
-
+    fig.update_layout(title=f"Wyckoff + MACD: {activo_grafico}", template="plotly_dark", height=700, xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
+    
