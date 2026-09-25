@@ -1,28 +1,23 @@
 import yfinance as yf
 import pandas as pd
-import numpy as np
 
-# ==========================================
-# PARÁMETROS CONFIGURABLES DE ALERTA
-# ==========================================
-FACTOR_VOLUMEN = 1.5   # Volumen anormal: 150% sobre su media
-VENTANA_RANGOS = 12    # Barras para definir techos y suelos previos
-PERIODO_VOL = 20       # Media móvil de volumen
+def evaluar_wyckoff_vsa_alertas(df, factor_volumen=1.5, ventana_rangos=12):
+    """
+    Procesa el DataFrame y devuelve el estado actual y las señales afinadas
+    sincronizadas con la lógica de la app principal.
+    """
+    if df is None or len(df) < 50:
+        return None, "DATOS_INSUFICIENTES"
 
-def calcular_indicadores(df):
-    """Calcula Medias, MACD, RSI y ATR para el análisis de divergencias y volatilidad."""
-    if len(df) < 50:
-        return df
-
-    # 1. Medias Móviles y Volumen Relativo
-    df['Vol_SMA'] = df['Volume'].rolling(window=PERIODO_VOL).mean()
+    # 1. Medias Móviles y Volumen
+    df['Vol_SMA'] = df['Volume'].rolling(window=20).mean()
     df['Vol_Ratio'] = df['Volume'] / df['Vol_SMA']
     df['SMA20'] = df['Close'].rolling(window=20).mean()
     df['SMA50'] = df['Close'].rolling(window=50).mean()
 
-    # 2. Rangos Previos (Soportes y Resistencias excluyendo la vela actual)
-    df['Min_Previo'] = df['Low'].shift(1).rolling(window=VENTANA_RANGOS).min()
-    df['Max_Previo'] = df['High'].shift(1).rolling(window=VENTANA_RANGOS).max()
+    # 2. Soportes y Resistencias Previas (sin contar la vela actual)
+    df['Min_Previo'] = df['Low'].shift(1).rolling(window=ventana_rangos).min()
+    df['Max_Previo'] = df['High'].shift(1).rolling(window=ventana_rangos).max()
 
     # 3. MACD (12, 26, 9)
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
@@ -38,61 +33,50 @@ def calcular_indicadores(df):
     rs = gain / loss
     df['RSI'] = 100 - (100 / (1 + rs))
 
-    # 5. Giros del Histograma del MACD
+    # 5. Giros del Histograma
     df['MACD_Giro_Alcista'] = df['MACD_Hist'] > df['MACD_Hist'].shift(1)
     df['MACD_Giro_Bajista'] = df['MACD_Hist'] < df['MACD_Hist'].shift(1)
 
-    return df
+    # 6. Intención del Cierre de la Vela
+    df['Vela_Alcista'] = df['Close'] > df['Open']
+    df['Vela_Bajista'] = df['Close'] < df['Open']
 
-def evaluar_wyckoff_vsa(df):
-    """
-    Evalúa la presencia de patrones Wyckoff + VSA + Divergencias de Indicador.
-    Devuelve la última vela analizada con su diagnóstico de alerta.
-    """
-    df = calcular_indicadores(df)
-    if len(df) < 50:
-        return None
+    # Tests de Volumen Inusual en Zonas Clave
+    df['Test_Suelo'] = (df['Vol_Ratio'] >= factor_volumen) & (df['Low'] <= df['Min_Previo'])
+    df['Test_Techo'] = (df['Vol_Ratio'] >= factor_volumen) & (df['High'] >= df['Max_Previo'])
 
-    # Testeo de Soportes y Resistencias con volumen inusual
-    df['Test_Suelo'] = (df['Vol_Ratio'] >= FACTOR_VOLUMEN) & (df['Low'] <= df['Min_Previo'])
-    df['Test_Techo'] = (df['Vol_Ratio'] >= FACTOR_VOLUMEN) & (df['High'] >= df['Max_Previo'])
-
-    # --- CONDICIONES ALCISTAS (🚀 SUBIDA PROBABLE) ---
-    # A) Spring / Acumulación: Barrido de soporte + Giro alcista MACD + RSI recuperando de sobreventa (<45)
-    spring = df['Test_Suelo'] & df['MACD_Giro_Alcista'] & (df['RSI'] < 50)
-    # B) Absorción en Resistencias: Ruptura/Test de techo con volumen + MACD fuertemente positivo (>0) + Precio > SMA20
-    absorcion = df['Test_Techo'] & (df['MACD_Hist'] > 0) & df['MACD_Giro_Alcista'] & (df['Close'] >= df['SMA20'])
-
-    df['Alerta_Subida'] = spring | absorcion
-
-    # --- CONDICIONES BAJISTAS (💩 CAÍDA PROBABLE) ---
-    # A) Upthrust / Distribución: Testeo de techo con volumen + Giro bajista MACD + RSI en zona alta (>55)
-    upthrust = df['Test_Techo'] & df['MACD_Giro_Bajista'] & (df['RSI'] > 50)
-    # B) Pérdida de Soporte / Fallo Spring: Caída rompiendo suelo con volumen + MACD negativo (<0) y cayendo
-    ruptura_bajista = df['Test_Suelo'] & (df['MACD_Hist'] < 0) & df['MACD_Giro_Bajista']
-
-    df['Alerta_Bajada'] = upthrust | ruptura_bajista
-
-    return df.iloc[-1]
-
-def generar_mensaje_telegram(ticker, nombre, ultima_vela):
-    """Genera el texto de la notificación para Telegram si hay alerta activa."""
-    if ultima_vela['Alerta_Subida']:
-        emoji = "🚀"
-        tipo = "SUBIDA PROBABLE (Acumulación / Absorción)"
-        detalles = f"• Volumen Relativo: {ultima_vela['Vol_Ratio']:.2f}x\n• RSI: {ultima_vela['RSI']:.1f}\n• Precio: ${ultima_vela['Close']:.2f}"
-    elif ultima_vela['Alerta_Bajada']:
-        emoji = "💩"
-        tipo = "CAÍDA PROBABLE (Distribución / Pérdida Soporte)"
-        detalles = f"• Volumen Relativo: {ultima_vela['Vol_Ratio']:.2f}x\n• RSI: {ultima_vela['RSI']:.1f}\n• Precio: ${ultima_vela['Close']:.2f}"
-    else:
-        return None
-
-    mensaje = (
-        f"{emoji} *ALERTA WYCKOFF + VSA*\n"
-        f"*Activo:* {ticker} ({nombre})\n"
-        f"*Diagnóstico:* {tipo}\n\n"
-        f"*Datos Clave:*\n{detalles}\n"
-        f"───────────────────"
+    # 🚀 Lógica de SUBIDA CONFIRMADA
+    spring_confirmado = df['Test_Suelo'] & df['Vela_Alcista'] & df['MACD_Giro_Alcista'] & (df['RSI'] < 50)
+    absorcion_confirmada = (
+        df['Test_Techo'] & 
+        df['Vela_Alcista'] & 
+        (df['Close'] >= df['SMA20']) & 
+        (df['Close'] >= df['SMA50']) & 
+        (df['MACD_Hist'] > 0) & 
+        df['MACD_Giro_Alcista']
     )
-    return mensaje
+    df['Señal_Subida'] = spring_confirmado | absorcion_confirmada
+
+    # 💩 Lógica de CAÍDA CONFIRMADA
+    upthrust_confirmado = df['Test_Techo'] & df['Vela_Bajista'] & df['MACD_Giro_Bajista'] & (df['RSI'] > 50)
+    ruptura_confirmada = (
+        df['Test_Suelo'] & 
+        df['Vela_Bajista'] & 
+        (df['Close'] <= df['SMA20']) & 
+        (df['Close'] <= df['SMA50']) & 
+        (df['MACD_Hist'] < 0) & 
+        df['MACD_Giro_Bajista']
+    )
+    df['Señal_Bajada'] = upthrust_confirmado | ruptura_confirmada
+
+    # Evaluar la última vela cerrada
+    ultima_vela = df.iloc[-1]
+
+    if ultima_vela['Señal_Subida']:
+        tipo_patron = "SPRING (Suelo)" if spring_confirmado.iloc[-1] else "ABSORCIÓN (Breakout)"
+        return ultima_vela, f"🚀 SUBIDA_PROBABLE ({tipo_patron})"
+    elif ultima_vela['Señal_Bajada']:
+        tipo_patron = "UPTHRUST (Techo)" if upthrust_confirmado.iloc[-1] else "FALLO DE SOPORTE"
+        return ultima_vela, f"💩 CAÍDA_PROBABLE ({tipo_patron})"
+    else:
+        return ultima_vela, "NEUTRAL"
