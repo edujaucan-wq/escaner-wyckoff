@@ -38,6 +38,7 @@ CATALOGO_ACTIVOS = {
     },
     "🌍 Índices Globales y Regiones": {
         "URTH": "iShares MSCI World (Desarrollados Global)",
+        "ACWI": "iShares MSCI ACWI ETF (Mundo Global Desarrollado + Emergentes)",
         "QQQ": "Invesco QQQ (Nasdaq 100 EE.UU.)",
         "SPY": "SPDR S&P 500 ETF Trust",
         "IWM": "iShares Russell 2000 (Small Caps EE.UU.)",
