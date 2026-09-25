@@ -156,15 +156,16 @@ def descargar_datos(tickers, period, interval):
     return df
 
 def procesar_df_wyckoff(df, p_vol, f_vol, v_rangos, p_tend):
-    if len(df) < max(p_vol, p_tend, 35) + 4:
+    if len(df) < max(p_vol, p_tend, 50) + 4:
         return df
     
-    # 1. Volumen y Tendencia
+    # 1. Volumen y Tendencia (Medias de 20 y 50)
     df['Vol_SMA'] = df['Volume'].rolling(window=p_vol).mean()
     df['Vol_Ratio'] = df['Volume'] / df['Vol_SMA']
     df['Precio_SMA_Tend'] = df['Close'].rolling(window=p_tend).mean()
     df['SMA_Pendiente'] = df['Precio_SMA_Tend'] - df['Precio_SMA_Tend'].shift(4)
     df['SMA20'] = df['Close'].rolling(window=20).mean()
+    df['SMA50'] = df['Close'].rolling(window=50).mean()
     df['Min_Reciente'] = df['Close'].rolling(window=v_rangos).min()
     df['Max_Reciente'] = df['Close'].rolling(window=v_rangos).max()
     
@@ -219,13 +220,13 @@ for ticker in tickers_lista:
             estado = "NEUTRAL"
             
             if ultima['Spring_Elite']:
-                estado = "🚀 SPRING ÉLITE (Confirmado MACD)"
+                estado = "🚀 SPRING ÉLITE (Acumulación Alcista)"
             elif ultima['Spring_Fallo']:
-                estado = "⚠️ SPRING DUDOSO (Fallo/Trampa MACD)"
+                estado = "⚠️ FALLO SPRING (Caída Libre / Venta Real)"
             elif ultima['Upthrust_Elite']:
-                estado = "🔴 UPTHRUST ÉLITE (Confirmado MACD)"
+                estado = "🔴 UPTHRUST ÉLITE (Distribución Bajista)"
             elif ultima['Upthrust_Fallo']:
-                estado = "⚠️ UPTHRUST DUDOSO (Fallo/Trampa MACD)"
+                estado = "🎁 REGALO DE TRULLAS (Absorción Alcista)"
                 
             resultados.append({
                 "Ticker": ticker,
@@ -245,7 +246,7 @@ st.dataframe(df_res, use_container_width=True, hide_index=True)
 # 5. VISUALIZADOR DE GRÁFICO CON MACD
 # ==========================================
 st.markdown("---")
-st.subheader(f"📈 Gráfico ({temporalidad}) con Medias Móviles, MACD y Señales")
+st.subheader(f"📈 Gráfico ({temporalidad}) con Precio, SMA 50, MACD y Señales")
 
 activo_grafico = st.selectbox(
     "Selecciona un activo para inspeccionar sus puntos:",
@@ -259,9 +260,33 @@ if activo_grafico:
     
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
 
-    # Fila 1: Precio y Medias
-    fig.add_trace(go.Candlestick(x=df_g.index, open=df_g['Open'], high=df_g['High'], low=df_g['Low'], close=df_g['Close'], name="Precio"), row=1, col=1)
-    fig.add_trace(go.Scatter(x=df_g.index, y=df_g['SMA20'], mode='lines', line=dict(color='orange', width=1.5), name="SMA 20"), row=1, col=1)
+    # 1. Velas Japonesas
+    fig.add_trace(go.Candlestick(
+        x=df_g.index, 
+        open=df_g['Open'], 
+        high=df_g['High'], 
+        low=df_g['Low'], 
+        close=df_g['Close'], 
+        name="Velas"
+    ), row=1, col=1)
+
+    # 2. Línea de Precio de Cierre (para seguir la tendencia con claridad)
+    fig.add_trace(go.Scatter(
+        x=df_g.index, 
+        y=df_g['Close'], 
+        mode='lines', 
+        line=dict(color='rgba(255, 255, 255, 0.6)', width=1.5), 
+        name="Línea Precio Cierre"
+    ), row=1, col=1)
+
+    # 3. Media Móvil SMA 50 (Soporte/Resistencia Institucional)
+    fig.add_trace(go.Scatter(
+        x=df_g.index, 
+        y=df_g['SMA50'], 
+        mode='lines', 
+        line=dict(color='orange', width=2), 
+        name="SMA 50 (Tendencia)"
+    ), row=1, col=1)
 
     # Marcadores de Señales Wyckoff + MACD
     springs_e = df_g[df_g['Spring_Elite']]
@@ -269,15 +294,53 @@ if activo_grafico:
     upthrusts_e = df_g[df_g['Upthrust_Elite']]
     upthrusts_f = df_g[df_g['Upthrust_Fallo']]
 
+    # A) COMPRA: Spring Élite (Flecha verde arriba)
     if not springs_e.empty:
-        fig.add_trace(go.Scatter(x=springs_e.index, y=springs_e['Low']*0.98, mode='markers+text', marker=dict(symbol='triangle-up', size=14, color='lime'), text=['🚀 Spring Élite']*len(springs_e), textposition='bottom center', name="Spring Élite"), row=1, col=1)
-    if not springs_f.empty:
-        fig.add_trace(go.Scatter(x=springs_f.index, y=springs_f['Low']*0.98, mode='markers+text', marker=dict(symbol='triangle-up', size=10, color='yellow'), text=['⚠️ Spring Fallo MACD']*len(springs_f), textposition='bottom center', name="Spring Fallo"), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=springs_e.index, 
+            y=springs_e['Low']*0.98, 
+            mode='markers+text', 
+            marker=dict(symbol='triangle-up', size=14, color='lime'), 
+            text=['🚀 Spring Élite']*len(springs_e), 
+            textposition='bottom center', 
+            name="Spring Élite (Compra)"
+        ), row=1, col=1)
 
-    if not upthrusts_e.empty:
-        fig.add_trace(go.Scatter(x=upthrusts_e.index, y=upthrusts_e['High']*1.02, mode='markers+text', marker=dict(symbol='triangle-down', size=14, color='red'), text=['🔴 Upthrust Élite']*len(upthrusts_e), textposition='top center', name="Upthrust Élite"), row=1, col=1)
+    # B) COMPRA: Fallo Upthrust / Regalo de Trullas (Diamante violeta arriba)
     if not upthrusts_f.empty:
-        fig.add_trace(go.Scatter(x=upthrusts_f.index, y=upthrusts_f['High']*1.02, mode='markers+text', marker=dict(symbol='triangle-down', size=10, color='orange'), text=['⚠️ Upthrust Fallo MACD']*len(upthrusts_f), textposition='top center', name="Upthrust Fallo"), row=1, col=1)
+        fig.add_trace(go.Scatter(
+            x=upthrusts_f.index, 
+            y=upthrusts_f['High']*1.02, 
+            mode='markers+text', 
+            marker=dict(symbol='diamond', size=14, color='#D000FF'), 
+            text=['🎁 Regalo Trullas']*len(upthrusts_f), 
+            textposition='top center', 
+            name="Regalo Trullas (Absorción Alcista)"
+        ), row=1, col=1)
+
+    # C) VENTA: Upthrust Élite (Flecha roja abajo)
+    if not upthrusts_e.empty:
+        fig.add_trace(go.Scatter(
+            x=upthrusts_e.index, 
+            y=upthrusts_e['High']*1.02, 
+            mode='markers+text', 
+            marker=dict(symbol='triangle-down', size=14, color='red'), 
+            text=['🔴 Upthrust Élite']*len(upthrusts_e), 
+            textposition='top center', 
+            name="Upthrust Élite (Venta)"
+        ), row=1, col=1)
+
+    # D) PELIGRO: Fallo Spring (Triángulo amarillo abajo)
+    if not springs_f.empty:
+        fig.add_trace(go.Scatter(
+            x=springs_f.index, 
+            y=springs_f['Low']*0.98, 
+            mode='markers+text', 
+            marker=dict(symbol='triangle-down-open', size=12, color='yellow'), 
+            text=['⚠️ Fallo Spring']*len(springs_f), 
+            textposition='bottom center', 
+            name="Fallo Spring (Caída Libre)"
+        ), row=1, col=1)
 
     # Fila 2: Indicador MACD e Histograma
     fig.add_trace(go.Scatter(x=df_g.index, y=df_g['MACD'], mode='lines', line=dict(color='cyan', width=1.5), name="MACD"), row=2, col=1)
@@ -285,6 +348,11 @@ if activo_grafico:
     colores_hist = ['green' if val >= 0 else 'red' for val in df_g['MACD_Hist']]
     fig.add_trace(go.Bar(x=df_g.index, y=df_g['MACD_Hist'], marker_color=colores_hist, name="Histograma"), row=2, col=1)
 
-    fig.update_layout(title=f"Wyckoff + MACD: {activo_grafico}", template="plotly_dark", height=700, xaxis_rangeslider_visible=False)
+    fig.update_layout(
+        title=f"Wyckoff + MACD: {activo_grafico}", 
+        template="plotly_dark", 
+        height=700, 
+        xaxis_rangeslider_visible=False,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
     st.plotly_chart(fig, use_container_width=True)
-    
