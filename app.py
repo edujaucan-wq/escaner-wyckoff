@@ -7,33 +7,97 @@ from plotly.subplots import make_subplots
 st.set_page_config(page_title="Escáner Wyckoff + VSA + MACD Afinado", layout="wide")
 
 # ==========================================
-# 1. CATÁLOGO DE ACTIVOS
+# 1. CATÁLOGO COMPLETO DE ACTIVOS
 # ==========================================
 CATALOGO_ACTIVOS = {
     "⛏️ Activos Escasos, Commodities y Cripto": {
         "GLD": "SPDR Gold Shares (Oro Físico)",
         "SLV": "iShares Silver Trust (Plata)",
-        "BTC-USD": "Bitcoin / USD",
-        "ETH-USD": "Ethereum / USD",
-        "SOL-USD": "Solana / USD",
+        "BTC-USD": "Bitcoin / USD (Activo Escaso Digital)",
+        "ETH-USD": "Ethereum / USD (Plataforma L1 / PoS)",
+        "SOL-USD": "Solana / USD (Activo L1 Alt-Cap)",
         "COPX": "Global X Copper Miners (Cobre)",
-        "URA": "Global X Uranium ETF",
-        "USO": "United States Oil Fund (Petróleo)"
+        "URA": "Global X Uranium ETF (Uranio)",
+        "LIT": "Global X Lithium & Battery Tech (Litio)",
+        "REMX": "VanEck Rare Earth/Strategic Metals",
+        "USO": "United States Oil Fund (Petróleo WTI)",
+        "BNO": "United States Brent Oil Fund",
+        "UNG": "United States Natural Gas Fund",
+        "DBA": "Invesco DB Agriculture Fund",
+        "CORN": "Teucrium Corn Fund (Maíz)",
+        "WEAT": "Teucrium Wheat Fund (Trigo)",
+        "SOYB": "Teucrium Soybean Fund (Soja)",
+        "CPER": "United States Copper Index Fund",
+        "PALL": "Abrdn Physical Palladium Shares",
+        "PPLT": "Abrdn Physical Platinum Shares",
+        "XME": "SPDR S&P Metals & Mining ETF",
+        "XOP": "SPDR S&P Oil & Gas Exploration"
     },
     "🌍 Índices Globales y Regiones": {
-        "URTH": "iShares MSCI World",
-        "QQQ": "Invesco QQQ (Nasdaq 100)",
-        "SPY": "SPDR S&P 500 ETF",
-        "IWM": "iShares Russell 2000",
+        "URTH": "iShares MSCI World (Desarrollados Global)",
+        "ACWI": "iShares MSCI ACWI ETF (Mundo Global Desarrollado + Emergentes)",
+        "QQQ": "Invesco QQQ (Nasdaq 100 EE.UU.)",
+        "SPY": "SPDR S&P 500 ETF Trust",
+        "IWM": "iShares Russell 2000 (Small Caps EE.UU.)",
         "EEM": "iShares MSCI Emerging Markets",
-        "EWP": "iShares MSCI Spain ETF"
+        "VGK": "Vanguard FTSE Europe ETF",
+        "EWJ": "iShares MSCI Japan ETF (Nikkei 225)",
+        "FXI": "iShares China Large-Cap ETF",
+        "INDA": "iShares MSCI India ETF",
+        "EWZ": "iShares MSCI Brazil ETF",
+        "EWP": "iShares MSCI Spain ETF (Ibex 35)",
+        "EWG": "iShares MSCI Germany ETF (DAX)",
+        "EWT": "iShares MSCI Taiwan ETF",
+        "EWY": "iShares MSCI South Korea ETF",
+        "TUR": "iShares MSCI Turkey ETF"
     },
-    "🏭 Sectores y Temáticos": {
-        "XLK": "Technology Select Sector",
-        "XLF": "Financial Select Sector",
-        "XLE": "Energy Select Sector",
+    "🏭 Sectores Industriales y Macro": {
+        "XLK": "Technology Select Sector (Tecnología)",
+        "XLF": "Financial Select Sector (Bancos y Finanzas)",
+        "XLV": "Health Care Select Sector (Salud y Farmacia)",
+        "XLE": "Energy Select Sector (Energía Tradicional)",
+        "XLY": "Consumer Discretionary (Consumo Cíclico)",
+        "XLP": "Consumer Staples (Consumo Defensivo)",
+        "XLI": "Industrial Select Sector (Industria)",
+        "XLU": "Utilities Select Sector (Servicios Públicos)",
+        "XLB": "Materials Select Sector (Materiales Básicos)",
+        "XLRE": "Real Estate Select Sector (Inmobiliario)",
+        "XLC": "Communication Services (Comunicaciones)",
         "SMH": "VanEck Semiconductor ETF",
-        "BOTZ": "Global X Robotics & AI"
+        "SOXX": "iShares Semiconductor ETF",
+        "KBE": "SPDR S&P Bank ETF",
+        "XBI": "SPDR S&P Biotech ETF",
+        "ITA": "iShares U.S. Aerospace & Defense"
+    },
+    "🏛️ Bonos y Renta Fija": {
+        "TLT": "iShares 20+ Year Treasury Bond ETF",
+        "DTLA.L": "iShares $ Treasury Bond 20+yr UCITS",
+        "IEF": "iShares 7-10 Year Treasury Bond ETF",
+        "SHY": "iShares 1-3 Year Treasury Bond ETF",
+        "TIP": "iShares TIPS Bond ETF (Protegido Inflación)",
+        "HYG": "iShares High Yield Corporate Bond",
+        "AGG": "iShares Core U.S. Aggregate Bond"
+    },
+    "🚀 Temáticos y Megatrends": {
+        "ARKK": "ARK Innovation ETF",
+        "BOTZ": "Global X Robotics & AI",
+        "AIQ": "Global X Artificial Intelligence & Tech",
+        "CIBR": "First Trust NASDAQ Cybersecurity",
+        "ICLN": "iShares Global Clean Energy ETF",
+        "TAN": "Invesco Solar ETF",
+        "PAVE": "Global X U.S. Infrastructure"
+    },
+    "👑 Megacaps": {
+        "AAPL": "Apple Inc.",
+        "MSFT": "Microsoft Corporation",
+        "NVDA": "NVIDIA Corporation",
+        "AMZN": "Amazon.com Inc.",
+        "GOOGL": "Alphabet Inc.",
+        "META": "Meta Platforms Inc.",
+        "TSLA": "Tesla Inc.",
+        "BRK-B": "Berkshire Hathaway Inc.",
+        "AVGO": "Broadcom Inc.",
+        "LLY": "Eli Lilly and Company"
     }
 }
 
