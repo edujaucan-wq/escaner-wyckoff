@@ -1,63 +1,75 @@
-import os
-import requests
 import yfinance as yf
 import pandas as pd
 
-# CONFIGURACIÓN (Usa las variables de entorno para seguridad)
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+# UMBRAL DE VOLUMEN INUSUAL CONFIGURABLE
+FACTOR_VOLUMEN = 1.3  # Ajustado a 1.3x la media de volumen
 
-ACTIVOS = [
-    "GLD", "SLV", "BTC-USD", "ETH-USD", "COPX", "URA", "USO", 
-    "QQQ", "SPY", "IWM", "EEM", "XLK", "XLF", "XLE", "SMH", 
-    "TLT", "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA"
-]
-
-def enviar_telegram(mensaje):
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Faltan credenciales de Telegram.")
-        return
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "Markdown"}
-    requests.post(url, data=payload)
-
-def comprobar_alertas():
-    print("Iniciando análisis de alertas Wyckoff...")
-    datos = yf.download(ACTIVOS, period="1y", interval="1d", group_by="ticker", progress=False)
+def evaluar_wyckoff_macd(df, p_vol=20, f_vol=FACTOR_VOLUMEN, v_rangos=12):
+    if len(df) < 35:
+        return None
+        
+    # 1. Volumen y Rangos
+    df['Vol_SMA'] = df['Volume'].rolling(window=p_vol).mean()
+    df['Vol_Ratio'] = df['Volume'] / df['Vol_SMA']
+    df['Min_Reciente'] = df['Close'].rolling(window=v_rangos).min()
+    df['Max_Reciente'] = df['Close'].rolling(window=v_rangos).max()
     
-    alertas = []
+    # 2. MACD
+    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
+    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
+    df['MACD'] = ema12 - ema26
+    df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
+    df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
     
-    for ticker in ACTIVOS:
-        try:
-            df = datos[ticker].dropna().copy() if len(ACTIVOS) > 1 else datos.dropna().copy()
-            if len(df) < 50:
-                continue
-            
-            # Cálculo de variables
-            df['Vol_SMA'] = df['Volume'].rolling(window=20).mean()
-            df['Vol_Ratio'] = df['Volume'] / df['Vol_SMA']
-            df['Min_Reciente'] = df['Close'].rolling(window=12).min()
-            df['Max_Reciente'] = df['Close'].rolling(window=12).max()
-            
-            ultima = df.iloc[-1]
-            
-            # Detección
-            es_spring = (ultima['Vol_Ratio'] >= 1.2) and (ultima['Close'] <= ultima['Min_Reciente'])
-            es_upthrust = (ultima['Vol_Ratio'] >= 1.2) and (ultima['Close'] >= ultima['Max_Reciente'])
-            
-            if es_spring:
-                alertas.append(f"🟢 **SPRING (Acumulación)** detectado en **{ticker}** | Precio: ${round(ultima['Close'], 2)} | Vol Ratio: {round(ultima['Vol_Ratio'], 2)}x")
-            elif es_upthrust:
-                alertas.append(f"🔴 **UPTHRUST (Distribución)** detectado en **{ticker}** | Precio: ${round(ultima['Close'], 2)} | Vol Ratio: {round(ultima['Vol_Ratio'], 2)}x")
-        except Exception as e:
-            continue
+    # 3. Giros
+    df['MACD_Giro_Alcista'] = df['MACD_Hist'] > df['MACD_Hist'].shift(1)
+    df['MACD_Giro_Bajista'] = df['MACD_Hist'] < df['MACD_Hist'].shift(1)
+    
+    # 4. Señales
+    df['Es_Spring'] = (df['Vol_Ratio'] >= f_vol) & (df['Close'] <= df['Min_Reciente'])
+    df['Es_Upthrust'] = (df['Vol_Ratio'] >= f_vol) & (df['Close'] >= df['Max_Reciente'])
+    
+    df['Spring_Elite'] = df['Es_Spring'] & df['MACD_Giro_Alcista']
+    df['Spring_Fallo'] = df['Es_Spring'] & (~df['MACD_Giro_Alcista'])
+    
+    df['Upthrust_Elite'] = df['Es_Upthrust'] & df['MACD_Giro_Bajista']
+    df['Upthrust_Fallo'] = df['Es_Upthrust'] & (~df['MACD_Giro_Bajista'])
+    
+    return df
 
-    if alertas:
-        mensaje_final = "🚨 **ALERTAS WYCKOFF DETECTADAS** 🚨\n\n" + "\n\n".join(alertas)
-        enviar_telegram(mensaje_final)
-        print("Alertas enviadas a Telegram.")
-    else:
-        print("No se encontraron alertas en este pase.")
-
-if __name__ == "__main__":
-    comprobar_alertas()
+def formatear_mensaje_telegram(ticker, ultima):
+    if ultima['Spring_Elite']:
+        return (
+            f"🚀 **ALERTA ÉLITE WYCKOFF + MACD** 🚀\n\n"
+            f"📌 **Activo:** {ticker}\n"
+            f"🟢 **Patrón:** Spring / Acumulación Institucional\n"
+            f"📊 **Volumen Inusual:** {round(ultima['Vol_Ratio'], 2)}x\n"
+            f"💡 **MACD:** Giro Alcista Confirmado (Absorción de Oferta)\n"
+            f"💰 **Precio:** ${round(ultima['Close'], 2)}"
+        )
+    elif ultima['Spring_Fallo']:
+        return (
+            f"⚠️ **ALERTA TRAMPA / FALLO MACD** ⚠️\n\n"
+            f"📌 **Activo:** {ticker}\n"
+            f"🟡 **Patrón:** Spring con Fallo de MACD\n"
+            f"📊 **Volumen Inusual:** {round(ultima['Vol_Ratio'], 2)}x\n"
+            f"🛑 **Atención:** El histograma MACD no acompaña. Posible trampa bajista o venta masiva."
+        )
+    elif ultima['Upthrust_Elite']:
+        return (
+            f"🔴 **ALERTA ÉLITE WYCKOFF + MACD** 🔴\n\n"
+            f"📌 **Activo:** {ticker}\n"
+            f"🔴 **Patrón:** Upthrust / Distribución Institucional\n"
+            f"📊 **Volumen Inusual:** {round(ultima['Vol_Ratio'], 2)}x\n"
+            f"💡 **MACD:** Giro Bajista Confirmado (Falta de Demanda)\n"
+            f"💰 **Precio:** ${round(ultima['Close'], 2)}"
+        )
+    elif ultima['Upthrust_Fallo']:
+        return (
+            f"⚠️ **ALERTA TRAMPA / FALLO MACD** ⚠️\n\n"
+            f"📌 **Activo:** {ticker}\n"
+            f"🟡 **Patrón:** Upthrust con Fallo de MACD\n"
+            f"📊 **Volumen Inusual:** {round(ultima['Vol_Ratio'], 2)}x\n"
+            f"🛑 **Atención:** El MACD sigue con fuerza alcista. Posible absorción compradora."
+        )
+    return None
