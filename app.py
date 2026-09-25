@@ -10,7 +10,7 @@ from plotly.subplots import make_subplots
 st.set_page_config(page_title="Escáner Wyckoff Multi-Tendencia", layout="wide")
 
 # ==========================================
-# 1. CATÁLOGO COMPLETO DE ACTIVOS (CON CRIPTO)
+# 1. CATÁLOGO COMPLETO DE ACTIVOS
 # ==========================================
 CATALOGO_ACTIVOS = {
     "⛏️ Activos Escasos, Commodities y Cripto": {
@@ -121,7 +121,6 @@ temporalidad = st.sidebar.radio(
     index=0
 )
 
-# Ajuste de sufijos y configuraciones según temporalidad
 intervalo_yf = "1wk" if temporalidad == "Semanal" else "1d"
 periodo_yf = "3y" if temporalidad == "Semanal" else "1y"
 sufijo_tiempo = "semanas" if temporalidad == "Semanal" else "días"
@@ -159,15 +158,17 @@ def procesar_df_wyckoff(df, p_vol, f_vol, v_rangos, p_tend):
     if len(df) < max(p_vol, p_tend, 50) + 4:
         return df
     
-    # 1. Volumen y Tendencia (SMA 20 y SMA 50)
+    # 1. Volumen, Medias y Rangos Previos (excluyendo la vela actual para evitar sesgo)
     df['Vol_SMA'] = df['Volume'].rolling(window=p_vol).mean()
     df['Vol_Ratio'] = df['Volume'] / df['Vol_SMA']
     df['Precio_SMA_Tend'] = df['Close'].rolling(window=p_tend).mean()
     df['SMA_Pendiente'] = df['Precio_SMA_Tend'] - df['Precio_SMA_Tend'].shift(4)
     df['SMA20'] = df['Close'].rolling(window=20).mean()
     df['SMA50'] = df['Close'].rolling(window=50).mean()
-    df['Min_Reciente'] = df['Close'].rolling(window=v_rangos).min()
-    df['Max_Reciente'] = df['Close'].rolling(window=v_rangos).max()
+    
+    # Referencias de Techo/Suelo previo
+    df['Min_Previo'] = df['Low'].shift(1).rolling(window=v_rangos).min()
+    df['Max_Previo'] = df['High'].shift(1).rolling(window=v_rangos).max()
     
     # 2. Indicador MACD (12, 26, 9)
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
@@ -176,19 +177,26 @@ def procesar_df_wyckoff(df, p_vol, f_vol, v_rangos, p_tend):
     df['MACD_Signal'] = df['MACD'].ewm(span=9, adjust=False).mean()
     df['MACD_Hist'] = df['MACD'] - df['MACD_Signal']
     
-    # 3. Giros e Inflexiones de MACD
+    # 3. Giros e Inflexiones del MACD
     df['MACD_Giro_Alcista'] = df['MACD_Hist'] > df['MACD_Hist'].shift(1)
     df['MACD_Giro_Bajista'] = df['MACD_Hist'] < df['MACD_Hist'].shift(1)
     
-    # 4. Señales Wyckoff + Filtro MACD + Detección de Fallos
-    df['Es_Spring'] = (df['Vol_Ratio'] >= f_vol) & (df['Close'] <= df['Min_Reciente'])
-    df['Es_Upthrust'] = (df['Vol_Ratio'] >= f_vol) & (df['Close'] >= df['Max_Reciente'])
+    # 4. Detección Wyckoff + MACD Re-calibrada
+    # Test/Ruptura de suelo o techo previo con volumen inusual
+    df['Es_Spring'] = (df['Vol_Ratio'] >= f_vol) & (df['Low'] <= df['Min_Previo'])
+    df['Es_Upthrust'] = (df['Vol_Ratio'] >= f_vol) & (df['High'] >= df['Max_Previo'])
     
+    # Spring Élite: Ruptura de suelo + Giro alcista de MACD
     df['Spring_Elite'] = df['Es_Spring'] & df['MACD_Giro_Alcista']
-    df['Spring_Fallo'] = df['Es_Spring'] & (~df['MACD_Giro_Alcista'])
     
+    # Fallo Spring: Ruptura de suelo + MACD marcadamente bajista
+    df['Spring_Fallo'] = df['Es_Spring'] & (df['MACD_Hist'] < 0) & df['MACD_Giro_Bajista']
+    
+    # Upthrust Élite: Testeo de techo + Giro bajista de MACD (Distribución)
     df['Upthrust_Elite'] = df['Es_Upthrust'] & df['MACD_Giro_Bajista']
-    df['Upthrust_Fallo'] = df['Es_Upthrust'] & (~df['MACD_Giro_Bajista'])
+    
+    # Regalo de Trullas / Fallo de Upthrust: Testeo de techo con volumen + MACD Fuertemente ALCISTA (Absorción)
+    df['Upthrust_Fallo'] = df['Es_Upthrust'] & (df['MACD_Hist'] > 0) & df['MACD_Giro_Alcista']
 
     def evaluar_tendencia(row):
         if row['Close'] >= row['Precio_SMA_Tend'] and row['SMA_Pendiente'] > 0:
@@ -270,16 +278,16 @@ if activo_grafico:
         name="Velas"
     ), row=1, col=1)
 
-    # 2. Línea de Precio de Cierre (Línea blanca brillante destacada)
+    # 2. LÍNEA DE PRECIO DE CIERRE (AMARILLO NEÓN DESTACADO)
     fig.add_trace(go.Scatter(
         x=df_g.index, 
         y=df_g['Close'], 
         mode='lines', 
-        line=dict(color='rgba(255, 255, 255, 0.9)', width=2), 
+        line=dict(color='#FFFF00', width=2.5), 
         name="Línea Precio Cierre"
     ), row=1, col=1)
 
-    # 3. Media Móvil SMA 20 (Corto Plazo - Cian)
+    # 3. Media Móvil SMA 20 (Cian)
     fig.add_trace(go.Scatter(
         x=df_g.index, 
         y=df_g['SMA20'], 
@@ -288,7 +296,7 @@ if activo_grafico:
         name="SMA 20 (Corto Plazo)"
     ), row=1, col=1)
 
-    # 4. Media Móvil SMA 50 (Medio/Largo Plazo - Naranja)
+    # 4. Media Móvil SMA 50 (Naranja)
     fig.add_trace(go.Scatter(
         x=df_g.index, 
         y=df_g['SMA50'], 
