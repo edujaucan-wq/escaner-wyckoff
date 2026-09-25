@@ -49,11 +49,11 @@ def formatear_mensaje_telegram(ticker, ultima):
         )
     elif ultima['Spring_Fallo']:
         return (
-            f"⚠️ **ALERTA TRAMPA / FALLO MACD** ⚠️\n\n"
+            f"⚠️ **ALERTA FALLO SPRING** ⚠️\n\n"
             f"📌 **Activo:** {ticker}\n"
-            f"🟡 **Patrón:** Spring con Fallo de MACD\n"
+            f"🟡 **Patrón:** Spring sin confirmación MACD\n"
             f"📊 **Volumen Inusual:** {round(ultima['Vol_Ratio'], 2)}x\n"
-            f"🛑 **Atención:** El histograma MACD no acompaña. Posible trampa bajista o venta masiva."
+            f"🛑 **Atención:** El MACD sigue bajista con fuerza. Posible caída libre o venta real."
         )
     elif ultima['Upthrust_Elite']:
         return (
@@ -66,10 +66,11 @@ def formatear_mensaje_telegram(ticker, ultima):
         )
     elif ultima['Upthrust_Fallo']:
         return (
-            f"⚠️ **ALERTA TRAMPA / FALLO MACD** ⚠️\n\n"
+            f"🎁 **REGALO DEL MERCADO / REGALO DE TRULLAS** 🎁\n\n"
             f"📌 **Activo:** {ticker}\n"
-            f"🟡 **Patrón:** Upthrust con Fallo de MACD\n"
+            f"🚀 **Patrón:** Fallo de MACD en Resistencia (Absorción Institucional)\n"
             f"📊 **Volumen Inusual:** {round(ultima['Vol_Ratio'], 2)}x\n"
-            f"🛑 **Atención:** El MACD sigue con fuerza alcista. Posible absorción compradora."
+            f"🔥 **Lectura:** El MACD no confirma la distribución. Las manos fuertes están absorbiendo la oferta para romper al alza.\n"
+            f"💰 **Precio:** ${round(ultima['Close'], 2)}"
         )
     return None
