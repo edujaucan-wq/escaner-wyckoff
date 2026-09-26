@@ -1,7 +1,7 @@
 import yfinance as yf
 import pandas as pd
 
-def evaluar_wyckoff_vsa_alertas(df, factor_volumen=1.5, ventana_rangos=12):
+def evaluar_wyckoff_vsa_alertas(df, factor_volumen=1.3, ventana_rangos=12):
     """
     Procesa el DataFrame y devuelve el estado actual y las señales afinadas
     sincronizadas con la lógica de la app principal.
