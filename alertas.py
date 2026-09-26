@@ -1,3 +1,5 @@
+import os
+import requests
 import yfinance as yf
 import pandas as pd
 
@@ -6,10 +8,6 @@ import pandas as pd
 # ==========================================
 
 def evaluar_wyckoff_vsa_alertas(df, factor_volumen=1.3, ventana_rangos=12):
-    """
-    Procesa el DataFrame y devuelve la última vela junto con el diagnóstico
-    sincronizado con la lógica de app.py.
-    """
     if df is None or len(df) < 50:
         return None, "DATOS_INSUFICIENTES"
 
@@ -21,7 +19,7 @@ def evaluar_wyckoff_vsa_alertas(df, factor_volumen=1.3, ventana_rangos=12):
     df['SMA20'] = df['Close'].rolling(window=20).mean()
     df['SMA50'] = df['Close'].rolling(window=50).mean()
 
-    # Soportes y Resistencias Previas (excluyendo la vela actual)
+    # Soportes y Resistencias Previas
     df['Min_Previo'] = df['Low'].shift(1).rolling(window=ventana_rangos).min()
     df['Max_Previo'] = df['High'].shift(1).rolling(window=ventana_rangos).max()
 
@@ -85,9 +83,6 @@ def evaluar_wyckoff_vsa_alertas(df, factor_volumen=1.3, ventana_rangos=12):
         return ultima_vela, "NEUTRAL"
 
 def generar_mensaje_swing_telegram(ticker, nombre, period="1y", interval="1d", factor_volumen=1.3):
-    """
-    Genera el mensaje formateado para Telegram en caso de señal Swing Trading.
-    """
     try:
         df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=True)
         if isinstance(df.columns, pd.MultiIndex):
@@ -122,9 +117,6 @@ def generar_mensaje_swing_telegram(ticker, nombre, period="1y", interval="1d", f
 # ==========================================
 
 def calcular_dca_inteligente_alertas(df, cuota_base=100.0):
-    """
-    Evalúa si un activo de largo plazo está en zona de descuento/oportunidad.
-    """
     if df is None or len(df) < 50:
         return None
 
@@ -195,9 +187,6 @@ def calcular_dca_inteligente_alertas(df, cuota_base=100.0):
     }
 
 def generar_mensaje_dca_telegram(ticker, nombre, cuota_base=100.0):
-    """
-    Descarga datos semanales y genera el mensaje para Telegram si hay oportunidad DCA.
-    """
     try:
         df = yf.download(ticker, period="3y", interval="1wk", progress=False, auto_adjust=True)
         if isinstance(df.columns, pd.MultiIndex):
@@ -223,3 +212,61 @@ def generar_mensaje_dca_telegram(ticker, nombre, cuota_base=100.0):
         return None
     except Exception:
         return None
+
+
+# ==========================================
+# 3. CONEXIÓN Y EJECUCIÓN PRINCIPAL
+# ==========================================
+
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+
+def enviar_a_telegram(mensaje):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("⚠️ Advertencia: Variables TELEGRAM_TOKEN o TELEGRAM_CHAT_ID no configuradas.")
+        return
+    
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": mensaje,
+        "parse_mode": "Markdown"
+    }
+    try:
+        res = requests.post(url, json=payload)
+        res.raise_for_status()
+        print("✅ Alerta enviada con éxito a Telegram.")
+    except Exception as e:
+        print(f"❌ Error enviando mensaje a Telegram: {e}")
+
+if __name__ == "__main__":
+    print("🔍 Iniciando escaneo de alertas...")
+
+    # Universos de activos a escanear
+    ACTIVOS_ESCANEO = {
+        "BTC-USD": "Bitcoin",
+        "ETH-USD": "Ethereum",
+        "SOL-USD": "Solana",
+        "SPY": "S&P 500 ETF",
+        "QQQ": "Nasdaq 100",
+        "GLD": "Oro Físico",
+        "SLV": "Plata"
+    }
+
+    alertas_enviadas = 0
+
+    # 1. Escaneo Swing Trading (Diario)
+    for ticker, nombre in ACTIVOS_ESCANEO.items():
+        msg_swing = generar_mensaje_swing_telegram(ticker, nombre, period="1y", interval="1d", factor_volumen=1.3)
+        if msg_swing:
+            enviar_a_telegram(msg_swing)
+            alertas_enviadas += 1
+
+    # 2. Escaneo DCA Inteligente (Semanal)
+    for ticker, nombre in ACTIVOS_ESCANEO.items():
+        msg_dca = generar_mensaje_dca_telegram(ticker, nombre, cuota_base=100.0)
+        if msg_dca:
+            enviar_a_telegram(msg_dca)
+            alertas_enviadas += 1
+
+    print(f"🏁 Escaneo finalizado. Total de alertas disparadas: {alertas_enviadas}")
