@@ -1,10 +1,14 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-st.set_page_config(page_title="Escáner Wyckoff + VSA + MACD Afinado", layout="wide")
+# ==========================================
+# CONFIGURACIÓN DE LA PÁGINA
+# ==========================================
+st.set_page_config(page_title="Escáner Wyckoff + DCA Inteligente", layout="wide")
 
 # ==========================================
 # 1. CATÁLOGO COMPLETO DE ACTIVOS
@@ -151,7 +155,7 @@ def procesar_wyckoff_vsa(df, f_vol, v_rangos):
     return df
 
 def calcular_dca_inteligente(df, cuota_base=100.0):
-    if len(df) < 50:
+    if df is None or len(df) < 50:
         return None
 
     # RSI (14)
@@ -179,17 +183,17 @@ def calcular_dca_inteligente(df, cuota_base=100.0):
     zona = "🟡 NEUTRAL / APORTACIÓN NORMAL"
     explicacion = []
 
-    # Evaluador RSI
-    if rSI < 35:
+    # Evaluador RSI (Corregida variable rsi)
+    if rsi < 35:
         multiplicador += 0.6
         explicacion.append("RSI en sobreventa extrema (<35)")
-    elif rSI < 45:
+    elif rsi < 45:
         multiplicador += 0.3
         explicacion.append("RSI en zona de descuento (<45)")
-    elif rSI > 70:
+    elif rsi > 70:
         multiplicador -= 0.6
         explicacion.append("RSI en sobrecompra eufórica (>70)")
-    elif rSI > 60:
+    elif rsi > 60:
         multiplicador -= 0.3
         explicacion.append("RSI en zona alta (>60)")
 
@@ -345,8 +349,13 @@ with tab2:
             pass
 
     df_dca_res = pd.DataFrame(resultados_dca)
-    columnas_orden = ["Ticker", "Nombre", "Precio", "RSI Semanal", "Drawdown %", "Zona DCA", "Multiplicador", "Aportación Sugerida", "Razones"]
-    st.dataframe(df_dca_res[columnas_orden], use_container_width=True, hide_index=True)
+    
+    # Manejo seguro si la lista trae datos
+    if not df_dca_res.empty:
+        columnas_orden = ["Ticker", "Nombre", "Precio", "RSI Semanal", "Drawdown %", "Zona DCA", "Multiplicador", "Aportación Sugerida", "Razones"]
+        st.dataframe(df_dca_res[columnas_orden], use_container_width=True, hide_index=True)
+    else:
+        st.warning("No se pudieron procesar los datos para la categoría seleccionada.")
 
     st.markdown("---")
     st.subheader("💡 Guía de Zonas DCA")
